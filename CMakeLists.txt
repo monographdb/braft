@@ -68,7 +68,7 @@ if(LEVELDB_WITH_SNAPPY)
 endif()
 
 find_path(BRPC_INCLUDE_PATH NAMES brpc/server.h)
-find_library(BRPC_LIB NAMES libbrpc.a brpc)
+find_library(BRPC_LIB NAMES brpc)
 if ((NOT BRPC_INCLUDE_PATH) OR (NOT BRPC_LIB))
     message(FATAL_ERROR "Fail to find brpc")
 endif()
