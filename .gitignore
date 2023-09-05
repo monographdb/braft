@@ -34,3 +34,5 @@ CTestTestfile.cmake
 
 # Github aciton
 !.github
+
+bld/

@@ -111,6 +111,8 @@ int Segment::create() {
     if (_fd >= 0) {
         butil::make_close_on_exec(_fd);
     }
+    fallocate(_fd, FALLOC_FL_ZERO_RANGE, 0, FLAGS_raft_max_segment_size);
+    posix_fadvise(_fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     LOG_IF(INFO, _fd >= 0) << "Created new segment `" << path 
                            << "' with fd=" << _fd ;
     return _fd >= 0 ? 0 : -1;
