@@ -24,6 +24,7 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <algorithm>
 #include <butil/strings/string_piece.h>
 #include <butil/endpoint.h>
 #include <butil/logging.h>
@@ -101,6 +102,8 @@ struct PeerId {
         HostName
     };
     Type type_;
+    std::string prefer_zone;
+    std::string current_zone;
 
     PeerId() : idx(0), role(REPLICA), type_(Type::EndPoint) {}
     explicit PeerId(butil::EndPoint addr_) : addr(addr_), idx(0), role(REPLICA), type_(Type::EndPoint) {}
@@ -112,10 +115,10 @@ struct PeerId {
     }
     /*intended implicit*/PeerId(const std::string& str) 
     { CHECK_EQ(0, parse(str)); }
+
     PeerId(const PeerId& id) = default;
     PeerId(PeerId&& id) = default;
     PeerId& operator=(const PeerId& id) = default;
-
     PeerId& operator=(PeerId&& id)  noexcept {
         if ( &id == this) {
             return *this;
@@ -125,6 +128,8 @@ struct PeerId {
         hostname_addr = std::move(id.hostname_addr);
         type_ = std::move(id.type_);
         role = std::move(id.role);
+        prefer_zone = std::move(id.prefer_zone);
+        current_zone = std::move(id.current_zone);
 
         return *this;
     }
@@ -139,6 +144,8 @@ struct PeerId {
         }
         idx = 0;
         role = REPLICA;
+        current_zone.clear();
+        prefer_zone.clear();
     }
 
     bool is_empty() const {
@@ -153,13 +160,28 @@ struct PeerId {
     }
     int parse(const std::string& str) {
         reset();
-        char temp_str[265]; // max length of DNS Name < 255
+        char temp_str[256]; // max length of DNS Name < 255
         int value = REPLICA;
         int port;
-        if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d%*[:]%d", temp_str, &port, &idx, &value)) {
-            reset();
+        char prefer_zone_str[32];
+        char current_zone_str[32];
+        if (str.empty()) {
             return -1;
         }
+        uint16_t colon_count = std::count(str.begin(), str.end(), ':');
+        if (colon_count < 4) {
+            if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d%*[:]%d", temp_str, &port, &idx, &value)) {
+                reset();
+                return -1;
+            }
+        } else {
+            if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d:%[^:]:%[^:]%*[:]%d", temp_str, &port, &idx, prefer_zone_str, current_zone_str, &value)) {
+                reset();
+                return -1;
+            }
+        }
+        prefer_zone.append(prefer_zone_str);
+        current_zone.append(current_zone_str);
         role = (Role)value;
         if (role > WITNESS) {
             reset();
@@ -176,12 +198,22 @@ struct PeerId {
         return 0;
     }
 
+    // format, hostname:port:idx:prefer_zone:current_zone:role
+    // 172-17-0-1.default.pod.cluster.local:8002:0:ap-northeast-1a:ap-northeast-1c:0
     std::string to_string() const {
-        char str[265]; // max length of DNS Name < 255
+        char str[512]; // max length of DNS Name < 255
         if (type_ == Type::EndPoint) {
-            snprintf(str, sizeof(str), "%s:%d:%d", butil::endpoint2str(addr).c_str(), idx, int(role));
+            if (prefer_zone.empty() && current_zone.empty()) {
+                snprintf(str, sizeof(str), "%s:%d:%d", butil::endpoint2str(addr).c_str(), idx, int(role));
+            } else {
+                snprintf(str, sizeof(str), "%s:%d:%s:%s:%d", butil::endpoint2str(addr).c_str(), idx, prefer_zone.c_str(), current_zone.c_str(), int(role));
+            }
         } else {
-            snprintf(str, sizeof(str), "%s:%d:%d", hostname_addr.to_string().c_str(), idx, int(role));
+            if (prefer_zone.empty() && current_zone.empty()) {
+                snprintf(str, sizeof(str), "%s:%d:%d", hostname_addr.to_string().c_str(), idx, int(role));
+            } else {
+                snprintf(str, sizeof(str), "%s:%d:%s:%s:%d", hostname_addr.to_string().c_str(), idx,  prefer_zone.c_str(), current_zone.c_str(), int(role));
+            }
         }
         return std::string(str);
     }
@@ -238,9 +270,17 @@ inline bool operator!=(const PeerId& id1, const PeerId& id2) {
 
 inline std::ostream& operator << (std::ostream& os, const PeerId& id) {
     if (id.type_ == PeerId::Type::EndPoint) {
-        return os << id.addr << ':' << id.idx << ':' << int(id.role);
+        if (id.prefer_zone.empty() && id.current_zone.empty()) {
+            return os << id.addr << ':' << id.idx << ':' << int(id.role);
+        } else {
+            return os << id.addr << ':' << id.idx << ':' << id.prefer_zone << ':' << id.current_zone << ':' << int(id.role);
+        }
     } else {
-        return os << id.hostname_addr << ':' << id.idx << ':' << int(id.role);
+        if (id.prefer_zone.empty() && id.current_zone.empty()) {
+            return os << id.hostname_addr << ':' << id.idx << ':' << int(id.role);
+        } else {
+            return os << id.hostname_addr << ':' << id.idx << ':' << id.prefer_zone << ':' << id.current_zone << ':' << int(id.role);
+        }
     }
 }
 

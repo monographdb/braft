@@ -32,6 +32,8 @@ DEFINE_string(conf, "", "Initial configuration of the replication group");
 DEFINE_string(data_path, "./data1", "Path of data stored on");
 DEFINE_string(group, "Counter", "Id of the replication group");
 DEFINE_string(node_hostname, "counter", "Dns name of this node.");
+DEFINE_string(current_zone, "", "the raft node deployed on currently");
+DEFINE_string(prefer_zone, "", "the raft node deployed on currently");
 
 namespace example {
 class Counter;
@@ -93,6 +95,8 @@ public:
         braft::PeerId node_host(addr);
         node_host.hostname_addr = braft::HostNameAddr(FLAGS_node_hostname, FLAGS_port);
         node_host.type_ = braft::PeerId::Type::HostName;
+        node_host.current_zone = FLAGS_current_zone;
+        node_host.prefer_zone = FLAGS_prefer_zone;
         braft::Node* node = new braft::Node(FLAGS_group, node_host);
         if (node->init(node_options) != 0) {
             LOG(ERROR) << "Fail to init raft node";
