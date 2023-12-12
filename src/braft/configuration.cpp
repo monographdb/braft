@@ -21,6 +21,9 @@
 
 namespace braft {
 
+const char *DEFAULT_PREFER_ZONE = "_NODE_PZ";
+const char *DEFAULT_CURRENT_ZONE = "_NODE_CZ";
+
 std::ostream& operator<<(std::ostream& os, const Configuration& a) {
     std::vector<PeerId> peers;
     a.list_peers(&peers);

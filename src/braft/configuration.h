@@ -35,6 +35,9 @@ typedef std::string GroupId;
 // GroupId with version, format: {group_id}_{index}
 typedef std::string VersionedGroupId;
 
+extern const char *DEFAULT_PREFER_ZONE;
+extern const char *DEFAULT_CURRENT_ZONE;
+
 enum Role {
     REPLICA = 0,
     WITNESS = 1,
@@ -91,7 +94,6 @@ inline std::string HostNameAddr::to_string() const {
 
 
 // Represent a participant in a replicating group.
-// Conf like: 172-17-0-1.default.pod.cluster.local:8002:0,172-17-0-2.default.pod.cluster.local:8002:0,172-17-0-3.default.pod.cluster.local:8002:0
 struct PeerId {
     butil::EndPoint addr; // ip+port.
     int idx; // idx in same addr, default 0
@@ -102,8 +104,8 @@ struct PeerId {
         HostName
     };
     Type type_;
-    std::string prefer_zone;
-    std::string current_zone;
+    std::string prefer_zone{DEFAULT_PREFER_ZONE};
+    std::string current_zone{DEFAULT_CURRENT_ZONE};
 
     PeerId() : idx(0), role(REPLICA), type_(Type::EndPoint) {}
     explicit PeerId(butil::EndPoint addr_) : addr(addr_), idx(0), role(REPLICA), type_(Type::EndPoint) {}
@@ -144,8 +146,6 @@ struct PeerId {
         }
         idx = 0;
         role = REPLICA;
-        current_zone.clear();
-        prefer_zone.clear();
     }
 
     bool is_empty() const {
@@ -168,20 +168,23 @@ struct PeerId {
         if (str.empty()) {
             return -1;
         }
+        // cloud availability zone info could be parsed if user has specified
         uint16_t colon_count = std::count(str.begin(), str.end(), ':');
         if (colon_count < 4) {
+            // conf format, 172-17-0-1.default.pod.cluster.local:8002:0:0
             if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d%*[:]%d", temp_str, &port, &idx, &value)) {
                 reset();
                 return -1;
             }
         } else {
+            // conf format, 172-17-0-1.default.pod.cluster.local:8002:0:prefer_zone:current_zone:0
             if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d:%[^:]:%[^:]%*[:]%d", temp_str, &port, &idx, prefer_zone_str, current_zone_str, &value)) {
                 reset();
                 return -1;
             }
+            prefer_zone.assign(prefer_zone_str);
+            current_zone.assign(current_zone_str);
         }
-        prefer_zone.append(prefer_zone_str);
-        current_zone.append(current_zone_str);
         role = (Role)value;
         if (role > WITNESS) {
             reset();
@@ -203,13 +206,13 @@ struct PeerId {
     std::string to_string() const {
         char str[512]; // max length of DNS Name < 255
         if (type_ == Type::EndPoint) {
-            if (prefer_zone.empty() && current_zone.empty()) {
+            if (prefer_zone == DEFAULT_PREFER_ZONE && current_zone == DEFAULT_CURRENT_ZONE) {
                 snprintf(str, sizeof(str), "%s:%d:%d", butil::endpoint2str(addr).c_str(), idx, int(role));
             } else {
                 snprintf(str, sizeof(str), "%s:%d:%s:%s:%d", butil::endpoint2str(addr).c_str(), idx, prefer_zone.c_str(), current_zone.c_str(), int(role));
             }
         } else {
-            if (prefer_zone.empty() && current_zone.empty()) {
+            if (prefer_zone == DEFAULT_PREFER_ZONE && current_zone == DEFAULT_CURRENT_ZONE) {
                 snprintf(str, sizeof(str), "%s:%d:%d", hostname_addr.to_string().c_str(), idx, int(role));
             } else {
                 snprintf(str, sizeof(str), "%s:%d:%s:%s:%d", hostname_addr.to_string().c_str(), idx,  prefer_zone.c_str(), current_zone.c_str(), int(role));
@@ -270,13 +273,13 @@ inline bool operator!=(const PeerId& id1, const PeerId& id2) {
 
 inline std::ostream& operator << (std::ostream& os, const PeerId& id) {
     if (id.type_ == PeerId::Type::EndPoint) {
-        if (id.prefer_zone.empty() && id.current_zone.empty()) {
+        if (id.prefer_zone == DEFAULT_PREFER_ZONE && id.current_zone == DEFAULT_CURRENT_ZONE) {
             return os << id.addr << ':' << id.idx << ':' << int(id.role);
         } else {
             return os << id.addr << ':' << id.idx << ':' << id.prefer_zone << ':' << id.current_zone << ':' << int(id.role);
         }
     } else {
-        if (id.prefer_zone.empty() && id.current_zone.empty()) {
+        if (id.prefer_zone == DEFAULT_PREFER_ZONE && id.current_zone == DEFAULT_CURRENT_ZONE) {
             return os << id.hostname_addr << ':' << id.idx << ':' << int(id.role);
         } else {
             return os << id.hostname_addr << ':' << id.idx << ':' << id.prefer_zone << ':' << id.current_zone << ':' << int(id.role);

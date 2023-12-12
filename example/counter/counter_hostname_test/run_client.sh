@@ -31,8 +31,6 @@ DEFINE_string crash_on_fatal 'true' 'Crash on fatal log'
 DEFINE_string log_each_request 'true' 'Print log for each request'
 DEFINE_string valgrind 'false' 'Run in valgrind'
 DEFINE_string use_bthread "true" "Use bthread to send request"
-DEFINE_string current_zone '' "the raft node deployed on currently"
-DEFINE_string prefer_zone '' "the raft node deployed on currently"
 
 FLAGS "$@" || exit 1
 
@@ -44,8 +42,8 @@ if [ "$FLAGS_valgrind" == "true" ] && [ $(which valgrind) ] ; then
     VALGRIND="valgrind --tool=memcheck --leak-check=full"
 fi
 
-raft_peers="${IP}:${FLAGS_server_port}:0:${FLAGS_current_zone}:${FLAGS_prefer_zone}"
-for ((i=1; i<$FLAGS_server_num; ++i)); do
+raft_peers=""
+for ((i=0; i<$FLAGS_server_num; ++i)); do
     raft_peers="${raft_peers}${IP}:$((${FLAGS_server_port}+i)):0,"
 done
 
