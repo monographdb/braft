@@ -656,6 +656,7 @@ int NodeImpl::init(const NodeOptions& options) {
             && _conf.conf.contains(_server_id)) {
         // The group contains only this server which must be the LEADER, trigger
         // the timer immediately.
+        _follower_lease.expire();
         elect_self(&lck);
     }
 
