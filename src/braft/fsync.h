@@ -27,11 +27,11 @@
 namespace braft {
 
 DECLARE_bool(raft_use_fsync_rather_than_fdatasync);
-DECLARE_bool(raft_use_iouring_fsync);
+DECLARE_bool(raft_use_bthread_fsync);
 
 inline int raft_fsync(int fd) {
     if (FLAGS_raft_use_fsync_rather_than_fdatasync) {
-        if (FLAGS_raft_use_iouring_fsync) {
+        if (FLAGS_raft_use_bthread_fsync) {
             int res = bthread_fsync(fd);
             if (res == -1) {
                 LOG(WARNING) << "bthread_fsync fails, use fsync";
