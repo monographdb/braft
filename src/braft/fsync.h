@@ -21,15 +21,26 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <gflags/gflags.h>
+#include <bthread/bthread.h>
 #include "braft/storage.h"
 
 namespace braft {
 
 DECLARE_bool(raft_use_fsync_rather_than_fdatasync);
+DECLARE_bool(raft_use_bthread_fsync);
 
 inline int raft_fsync(int fd) {
     if (FLAGS_raft_use_fsync_rather_than_fdatasync) {
-        return fsync(fd);
+        if (FLAGS_raft_use_bthread_fsync) {
+            int res = bthread_fsync(fd);
+            if (res == -1) {
+                return fsync(fd);
+            }
+            return res;
+        }
+        else {
+            return fsync(fd);
+        }
     } else {
 #ifdef __APPLE__
         return fcntl(fd, F_FULLFSYNC);

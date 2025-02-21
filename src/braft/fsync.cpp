@@ -23,6 +23,8 @@ DEFINE_bool(raft_use_fsync_rather_than_fdatasync,
             true,
             "Use fsync rather than fdatasync to flush page cache");
 
+DEFINE_bool(raft_use_bthread_fsync, true, "Use iouring to submit fsync which only blocks bthread");
+
 BRPC_VALIDATE_GFLAG(raft_use_fsync_rather_than_fdatasync,
                          brpc::PassValidate);
 
