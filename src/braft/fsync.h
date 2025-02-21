@@ -34,7 +34,6 @@ inline int raft_fsync(int fd) {
         if (FLAGS_raft_use_bthread_fsync) {
             int res = bthread_fsync(fd);
             if (res == -1) {
-                LOG(WARNING) << "bthread_fsync fails, use fsync";
                 return fsync(fd);
             }
             return res;
