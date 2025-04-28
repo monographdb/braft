@@ -46,6 +46,9 @@ butil::Status refresh_leader(const GroupId& group, int timeout_ms);
 // Remove this group from route table
 int remove_group(const GroupId& group);
 
+// Clear underlying channels
+void clear_internal_channels();
+
 }  // namespace rtb
 }  // namespace braft 
 
