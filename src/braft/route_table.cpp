@@ -99,6 +99,11 @@ public:
         return {true, chan};
     }
 
+    void clear_internal_channels() {
+        std::unique_lock<std::mutex> lk(_channel_mux);
+        _channels.clear();
+    }
+
 private:
 friend struct DefaultSingletonTraits<RouteTable>;
     RouteTable() {
@@ -257,6 +262,11 @@ int select_leader(const GroupId& group, PeerId* leader) {
 int remove_group(const GroupId& group) {
     RouteTable* const rtb = RouteTable::GetInstance();
     return rtb->remove_group(group);
+}
+
+void clear_internal_channels() {
+    RouteTable* const rtb = RouteTable::GetInstance();
+    rtb->clear_internal_channels();
 }
 
 }  // namespace rtb
