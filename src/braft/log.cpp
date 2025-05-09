@@ -108,6 +108,7 @@ int Segment::create() {
     std::string path(_path);
     butil::string_appendf(&path, "/" BRAFT_SEGMENT_OPEN_PATTERN, _first_index);
     _fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    LOG(INFO) << "Segment created, path: " << path << ", fd: " << _fd;
     if (_fd >= 0) {
         butil::make_close_on_exec(_fd);
     }
@@ -366,6 +367,18 @@ int Segment::load(ConfigurationManager* configuration_manager) {
     return ret;
 }
 
+inline bvar::LatencyRecorder append_ns("a_", "append_ns");
+inline bvar::LatencyRecorder append_total_us("a_", "append_total_us");
+
+struct Recorder {
+    Recorder() {
+        start_ns = butil::cpuwide_time_ns();
+    }
+    ~Recorder() {
+        append_ns << butil::cpuwide_time_ns() - start_ns;
+    }
+    int64_t start_ns;
+};
 int Segment::append(const LogEntry* entry) {
 
     if (BAIDU_UNLIKELY(!entry || !_is_open)) {
@@ -378,6 +391,7 @@ int Segment::append(const LogEntry* entry) {
         return ERANGE;
     }
 
+    // Recorder recorder;
     butil::IOBuf data;
     switch (entry->type) {
     case ENTRY_TYPE_DATA:
@@ -419,6 +433,7 @@ int Segment::append(const LogEntry* entry) {
     while (written < (ssize_t)to_write) {
         const ssize_t n = butil::IOBuf::cut_multiple_into_file_descriptor(
                 _fd, pieces + start, ARRAY_SIZE(pieces) - start);
+        // LOG(INFO) << "cut_multiple_into_file_descriptor size: " << n;
         if (n < 0) {
             LOG(ERROR) << "Fail to write to fd=" << _fd 
                        << ", path: " << _path << berror();
@@ -546,6 +561,7 @@ int Segment::close(bool will_sync) {
     }
     if (ret == 0) {
         _is_open = false;
+        LOG(INFO) << "Segment::close, old path: " << old_path << ", new path: " << new_path;
         const int rc = ::rename(old_path.c_str(), new_path.c_str());
         LOG_IF(INFO, rc == 0) << "Renamed `" << old_path
                               << "' to `" << new_path <<'\'';
@@ -724,16 +740,20 @@ int64_t SegmentLogStorage::last_log_index() {
     return _last_log_index.load(butil::memory_order_acquire);
 }
 
+inline bvar::LatencyRecorder append_entries_n("a_", "append_entries_size");
+
 int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOMetric* metric) {
     if (entries.empty()) {
         return 0;
     }
+    // LOG(INFO) << "append_entries, size: " << entries.size();
     if (_last_log_index.load(butil::memory_order_relaxed) + 1
             != entries.front()->id.index) {
         LOG(FATAL) << "There's gap between appending entries and _last_log_index"
                    << " path: " << _path;
         return -1;
     }
+    auto start = butil::cpuwide_time_us();
     scoped_refptr<Segment> last_segment = NULL;
     int64_t now = 0;
     int64_t delta_time_us = 0;
@@ -762,6 +782,8 @@ int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOM
         _last_log_index.fetch_add(1, butil::memory_order_release);
         last_segment = segment;
     }
+    append_total_us << butil::cpuwide_time_us() - start;
+    append_entries_n << entries.size();
     now = butil::cpuwide_time_us();
     last_segment->sync(_enable_sync);
     if (FLAGS_raft_trace_append_entry_latency && metric) {

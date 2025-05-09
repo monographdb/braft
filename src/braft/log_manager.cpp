@@ -517,9 +517,12 @@ public:
         _size = 0;
         _buffer_size = 0;
     }
+    // TODO(zkl): flush in the outside
     void append(LogManager::StableClosure* done) {
         if (_size == _cap || 
                 _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size) {
+            // LOG(INFO) << "_size: " << _size << ", _cap: " << _cap << ", _buffer_size: " << _buffer_size
+            //     << ", flush...";
             flush();
         }
         _storage[_size++] = done;
@@ -550,6 +553,8 @@ int LogManager::disk_thread(void* meta,
     // FIXME(chenzhangyi01): it's buggy
     LogId last_id = log_manager->_disk_id;
     StableClosure* storage[256];
+    // StableClosure* storage[1024];
+    // TODO(zkl): change cap
     AppendBatcher ab(storage, ARRAY_SIZE(storage), &last_id, log_manager);
     
     for (; iter; ++iter) {
