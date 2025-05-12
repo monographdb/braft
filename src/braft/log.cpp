@@ -421,20 +421,12 @@ int Segment::append(const LogEntry* entry) {
     }
     CHECK_LE(data.length(), 1ul << 56ul);
     char header_buf[ENTRY_HEADER_SIZE];
-    // const uint32_t meta_field = (entry->type << 24 ) | (_checksum_type << 16);
-    // RawPacker packer(header_buf);
-    // packer.pack64(entry->id.term)
-    //       .pack32(meta_field)
-    //       .pack32((uint32_t)data.length())
-    //       .pack32(get_checksum(_checksum_type, data));
-    // packer.pack32(get_checksum(
-    //               _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
     const uint32_t meta_field = (entry->type << 24 ) | (_checksum_type << 16);
     RawPacker packer(header_buf);
     packer.pack64(entry->id.term)
           .pack32(meta_field)
-          .pack32((uint32_t)entry->data.length())
-          .pack32(get_checksum(_checksum_type, entry->data));
+          .pack32((uint32_t)data.length())
+          .pack32(get_checksum(_checksum_type, data));
     packer.pack32(get_checksum(
                   _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
 

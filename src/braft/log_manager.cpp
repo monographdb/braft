@@ -536,6 +536,7 @@ public:
                 _dynamic_storage[i]->Run();
                 // run_ns << butil::cpuwide_time_ns() - start;
             }
+            _dynamic_storage.clear();
             _to_append.clear();
         }
         _size = 0;
