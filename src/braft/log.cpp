@@ -1424,6 +1424,7 @@ scoped_refptr<Segment> SegmentLogStorage::open_segment() {
                     LOG(ERROR) << "fail to flush segment data";
                     return nullptr;
                 }
+                _last_log_index.fetch_add(ret, butil::memory_order_release);
             }
             if (prev_open_segment->close(_enable_sync) == 0) {
                 BAIDU_SCOPED_LOCK(_mutex);

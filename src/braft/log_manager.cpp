@@ -27,6 +27,7 @@
 
 
 DEFINE_bool(use_new_append_entries, false, "use new append entries");
+DEFINE_int32(append_batcher_capacity, 256, "AppendBatcher capacity");
 DEFINE_bool(unlimit_append_batcher, false, "unlimit append batcher");
 
 namespace braft {
@@ -524,23 +525,44 @@ public:
                 _storage[i]->Run();
                 // run_ns << butil::cpuwide_time_ns() - start;
             }
+            for (size_t i = 0; i < _dynamic_storage.size(); ++i) {
+                _dynamic_storage[i]->_entries.clear();
+                if (_lm->_has_error.load(butil::memory_order_relaxed)) {
+                    _dynamic_storage[i]->status().set_error(
+                            EIO, "Corrupted LogStorage");
+                }
+                _dynamic_storage[i]->update_metric(&metric);
+                // auto start = butil::cpuwide_time_ns();
+                _dynamic_storage[i]->Run();
+                // run_ns << butil::cpuwide_time_ns() - start;
+            }
             _to_append.clear();
         }
         _size = 0;
         _buffer_size = 0;
         // LOG(INFO) << "flush, size: " << _size << ", to append cnt: " << _to_append.size();
     }
-    // TODO(zkl): flush in the outside
+
     void append(LogManager::StableClosure* done) {
-        if (_size == _cap || 
-                _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size) {
+        // TODO(zkl): trigger flush by FLAGS_append_batcher_capacity
+        if (!FLAGS_unlimit_append_batcher &&
+            (_size == _cap || _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size)) {
             // LOG(INFO) << "_size: " << _size << ", _cap: " << _cap << ", _buffer_size: " << _buffer_size
-            //     << ", _to_append size: " << _to_append.size() << ", flush...";
+            //         << ", _to_append size: " << _to_append.size() << ", flush...";
             flush();
         }
-        // LOG(INFO) << "size: " << _size << ", to_append size: " << _to_append.size();
-        _storage[_size++] = done;
-        _to_append.insert(_to_append.end(), 
+        if (_size == _cap) {
+            assert(FLAGS_unlimit_append_batcher);
+            // Emplace into the dynamic storage if the static storage is full.
+            if (_dynamic_storage.empty()) {
+                _dynamic_storage.reserve(1024);
+            }
+            _dynamic_storage.emplace_back(done);
+        } else {
+            _storage[_size++] = done;
+        }
+
+        _to_append.insert(_to_append.end(),
                          done->_entries.begin(), done->_entries.end());
         for (size_t i = 0; i < done->_entries.size(); ++i) {
             _buffer_size += done->_entries[i]->data.length();
@@ -549,6 +571,7 @@ public:
 
 private:
     LogManager::StableClosure** _storage;
+    std::vector<LogManager::StableClosure*> _dynamic_storage;
     size_t _cap;
     size_t _size;
     size_t _buffer_size;
@@ -567,7 +590,6 @@ int LogManager::disk_thread(void* meta,
     // FIXME(chenzhangyi01): it's buggy
     LogId last_id = log_manager->_disk_id;
     StableClosure* storage[256];
-    // StableClosure* storage[1024];
     AppendBatcher ab(storage, ARRAY_SIZE(storage), &last_id, log_manager);
 
     size_t disk_thread_iter_cnt = 0;
@@ -636,7 +658,7 @@ int LogManager::disk_thread(void* meta,
     CHECK(!iter) << "Must iterate to the end";
     ab.flush();
     log_manager->set_disk_id(last_id);
-    LOG(INFO) << "disk_thread iter cnt: " << disk_thread_iter_cnt;
+    // LOG(INFO) << "disk_thread iter cnt: " << disk_thread_iter_cnt;
     return 0;
 }
 
