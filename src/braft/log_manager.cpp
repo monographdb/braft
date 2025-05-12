@@ -25,6 +25,10 @@
 #include "braft/storage.h"                       // LogStorage
 #include "braft/fsm_caller.h"                    // FSMCaller
 
+
+DEFINE_bool(use_new_append_entries, false, "use new append entries");
+DEFINE_bool(unlimit_append_batcher, false, "unlimit append batcher");
+
 namespace braft {
 
 DEFINE_int32(raft_leader_batch, 256, "max leader io batch");
@@ -456,7 +460,8 @@ void LogManager::append_to_storage(std::vector<LogEntry*>* to_append,
         butil::Timer timer;
         timer.start();
         g_storage_append_entries_concurrency << 1;
-        int nappent = _log_storage->append_entries(*to_append, metric);
+        int nappent = FLAGS_use_new_append_entries ?
+            _log_storage->append_entries_new(*to_append, metric) :_log_storage->append_entries(*to_append, metric);
         g_storage_append_entries_concurrency << -1;
         timer.stop();
         if (nappent != (int)to_append->size()) {
@@ -483,6 +488,9 @@ void LogManager::append_to_storage(std::vector<LogEntry*>* to_append,
 DEFINE_int32(raft_max_append_buffer_size, 256 * 1024, 
              "Flush buffer to LogStorage if the buffer size reaches the limit");
 
+inline bvar::LatencyRecorder run_ns("a_", "closure_run_ns");
+inline bvar::LatencyRecorder append_to_storage_us("a_", "append_to_storage_us");
+
 class AppendBatcher {
 public:
     AppendBatcher(LogManager::StableClosure* storage[], size_t cap, LogId* last_id, 
@@ -501,7 +509,9 @@ public:
     void flush() {
         if (_size > 0) {
             IOMetric metric;
+            auto start = butil::cpuwide_time_us();
             _lm->append_to_storage(&_to_append, _last_id, &metric);
+            append_to_storage_us << butil::cpuwide_time_us() - start;
             g_storage_flush_batch_counter << _size;
             for (size_t i = 0; i < _size; ++i) {
                 _storage[i]->_entries.clear();
@@ -510,21 +520,25 @@ public:
                             EIO, "Corrupted LogStorage");
                 }
                 _storage[i]->update_metric(&metric);
+                // auto start = butil::cpuwide_time_ns();
                 _storage[i]->Run();
+                // run_ns << butil::cpuwide_time_ns() - start;
             }
             _to_append.clear();
         }
         _size = 0;
         _buffer_size = 0;
+        // LOG(INFO) << "flush, size: " << _size << ", to append cnt: " << _to_append.size();
     }
     // TODO(zkl): flush in the outside
     void append(LogManager::StableClosure* done) {
         if (_size == _cap || 
                 _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size) {
             // LOG(INFO) << "_size: " << _size << ", _cap: " << _cap << ", _buffer_size: " << _buffer_size
-            //     << ", flush...";
+            //     << ", _to_append size: " << _to_append.size() << ", flush...";
             flush();
         }
+        // LOG(INFO) << "size: " << _size << ", to_append size: " << _to_append.size();
         _storage[_size++] = done;
         _to_append.insert(_to_append.end(), 
                          done->_entries.begin(), done->_entries.end());
@@ -554,10 +568,11 @@ int LogManager::disk_thread(void* meta,
     LogId last_id = log_manager->_disk_id;
     StableClosure* storage[256];
     // StableClosure* storage[1024];
-    // TODO(zkl): change cap
     AppendBatcher ab(storage, ARRAY_SIZE(storage), &last_id, log_manager);
-    
+
+    size_t disk_thread_iter_cnt = 0;
     for (; iter; ++iter) {
+        disk_thread_iter_cnt++;
                 // ^^^ Must iterate to the end to release to corresponding
                 //     even if some error has occurred
         StableClosure* done = *iter;
@@ -621,6 +636,7 @@ int LogManager::disk_thread(void* meta,
     CHECK(!iter) << "Must iterate to the end";
     ab.flush();
     log_manager->set_disk_id(last_id);
+    LOG(INFO) << "disk_thread iter cnt: " << disk_thread_iter_cnt;
     return 0;
 }
 

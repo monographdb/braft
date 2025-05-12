@@ -52,6 +52,8 @@ BRPC_VALIDATE_GFLAG(raft_max_segment_size, brpc::PositiveInteger);
 DEFINE_bool(raft_sync_segments, false, "call fsync when a segment is closed");
 BRPC_VALIDATE_GFLAG(raft_sync_segments, ::brpc::PassValidate);
 
+DEFINE_int32(log_segment_data_list_batch_size, 256, "Size of log segment data list batch");
+
 static bvar::LatencyRecorder g_open_segment_latency("raft_open_segment");
 static bvar::LatencyRecorder g_segment_append_entry_latency("raft_segment_append_entry");
 static bvar::LatencyRecorder g_sync_segment_latency("raft_sync_segment");
@@ -391,8 +393,11 @@ int Segment::append(const LogEntry* entry) {
         return ERANGE;
     }
 
+    // LOG(INFO) << "entry data len: " << entry->data.length() << ", entry data: "
+    //     << entry->data.to_string();
     // Recorder recorder;
     butil::IOBuf data;
+    // LOG(INFO) << "entry type: " << int(entry->type);
     switch (entry->type) {
     case ENTRY_TYPE_DATA:
         data.append(entry->data);
@@ -416,18 +421,30 @@ int Segment::append(const LogEntry* entry) {
     }
     CHECK_LE(data.length(), 1ul << 56ul);
     char header_buf[ENTRY_HEADER_SIZE];
+    // const uint32_t meta_field = (entry->type << 24 ) | (_checksum_type << 16);
+    // RawPacker packer(header_buf);
+    // packer.pack64(entry->id.term)
+    //       .pack32(meta_field)
+    //       .pack32((uint32_t)data.length())
+    //       .pack32(get_checksum(_checksum_type, data));
+    // packer.pack32(get_checksum(
+    //               _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
     const uint32_t meta_field = (entry->type << 24 ) | (_checksum_type << 16);
     RawPacker packer(header_buf);
     packer.pack64(entry->id.term)
           .pack32(meta_field)
-          .pack32((uint32_t)data.length())
-          .pack32(get_checksum(_checksum_type, data));
+          .pack32((uint32_t)entry->data.length())
+          .pack32(get_checksum(_checksum_type, entry->data));
     packer.pack32(get_checksum(
                   _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
+
+    // LOG(INFO) << "entry data len: " << entry->data.length() << " entry data: " << entry->data.to_string()
+    //     << ", checksum: " << get_checksum(_checksum_type, data);
     butil::IOBuf header;
     header.append(header_buf, ENTRY_HEADER_SIZE);
     const size_t to_write = header.length() + data.length();
     butil::IOBuf* pieces[2] = { &header, &data };
+    // LOG(INFO) << "header: " << header.to_string() << ", data: " << data.to_string();
     size_t start = 0;
     ssize_t written = 0;
     while (written < (ssize_t)to_write) {
@@ -449,6 +466,122 @@ int Segment::append(const LogEntry* entry) {
     _unsynced_bytes += to_write;
 
     return 0;
+}
+
+int Segment::prepare_data(const LogEntry* entry) {
+    // LOG(INFO) << "entry data len: " << entry->data.length() << ", entry data: "
+    //     << entry->data.to_string();
+    if (BAIDU_UNLIKELY(!entry || !_is_open)) {
+        return EINVAL;
+    }
+    // else if (entry->id.index !=
+    //                 _last_index.load(butil::memory_order_consume) + 1) {
+    //     CHECK(false) << "entry->index=" << entry->id.index
+    //               << " _last_index=" << _last_index
+    //               << " _first_index=" << _first_index;
+    //     return ERANGE;
+    // }
+    if (_data_list.empty()) {
+        _data_list.reserve(FLAGS_log_segment_data_list_batch_size);
+        _offset_and_term_stashed.reserve(FLAGS_log_segment_data_list_batch_size);
+    }
+
+    butil::IOBuf head_and_data;
+
+    char header_buf[ENTRY_HEADER_SIZE];
+    const uint32_t meta_field = (entry->type << 24 ) | (_checksum_type << 16);
+    RawPacker packer(header_buf);
+    packer.pack64(entry->id.term)
+          .pack32(meta_field)
+          .pack32((uint32_t)entry->data.length())
+          .pack32(get_checksum(_checksum_type, entry->data));
+    packer.pack32(get_checksum(
+                  _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
+
+    head_and_data.append(header_buf, ENTRY_HEADER_SIZE);
+
+    // LOG(INFO) << "entry data len: " << entry->data.length()
+    //     << ", entry data: " << entry->data.to_string() << ", checksum: "
+    //     << get_checksum(_checksum_type, entry->data);
+
+    switch (entry->type) {
+    case ENTRY_TYPE_DATA:
+        head_and_data.append(entry->data);
+        break;
+    case ENTRY_TYPE_NO_OP:
+        break;
+    case ENTRY_TYPE_CONFIGURATION:
+        {
+            head_and_data.clear();
+            butil::IOBuf data;
+            butil::Status status = serialize_configuration_meta(entry, data);
+            if (!status.ok()) {
+                LOG(ERROR) << "Fail to serialize ConfigurationPBMeta, path: "
+                           << _path;
+                return -1;
+            }
+            RawPacker packer(header_buf);
+            packer.pack64(entry->id.term).pack32(meta_field).pack32((uint32_t)data.length())
+                .pack32(get_checksum(_checksum_type, data));
+            packer.pack32(get_checksum(
+                _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
+            head_and_data.append(header_buf, ENTRY_HEADER_SIZE);
+            head_and_data.append(data);
+        }
+        break;
+    default:
+        LOG(FATAL) << "unknow entry type: " << entry->type
+                   << ", path: " << _path;
+        return -1;
+    }
+    // LOG(INFO) << "data: " << head_and_data.to_string();
+    CHECK_LE(head_and_data.length(), 1ul << 56ul);
+    _data_list.emplace_back(std::move(head_and_data));
+    _pieces[_data_list.size() - 1] = &_data_list.back();
+    _to_write += _data_list.back().length();
+
+    _offset_and_term_stashed.push_back(std::make_pair(_bytes, entry->id.term));
+
+    return 0;
+}
+
+bool Segment::buffer_full() const {
+    return _data_list.size() == FLAGS_log_segment_data_list_batch_size;
+}
+
+bool Segment::need_flush() const {
+    return _to_write > 0;
+}
+
+int Segment::flush_data() {
+    int data_cnt = _data_list.size();
+    const size_t to_write = _to_write;
+    size_t start = 0;
+    ssize_t written = 0;
+    // LOG(INFO) << "write data, cnt: " << _data_list.size() << ", _to_write: " << _to_write;
+    while (written < (ssize_t)to_write) {
+        const ssize_t n = butil::IOBuf::cut_multiple_into_file_descriptor(
+                _fd, _pieces + start, data_cnt - start);
+        if (n < 0) {
+            LOG(ERROR) << "Fail to write to fd=" << _fd
+                       << ", path: " << _path << berror();
+            return -1;
+        }
+        written += n;
+        for (;start < data_cnt && _pieces[start]->empty(); ++start) {}
+    }
+    _data_list.clear();
+    _to_write = 0;
+
+    BAIDU_SCOPED_LOCK(_mutex);
+    _offset_and_term.insert(_offset_and_term.end(),
+        _offset_and_term_stashed.begin(), _offset_and_term_stashed.end());
+    _offset_and_term_stashed.clear();
+    _last_index.fetch_add(data_cnt, butil::memory_order_relaxed);
+    _bytes += to_write;
+    _unsynced_bytes += to_write;
+
+    return data_cnt;
 }
 
 int Segment::sync(bool will_sync) {
@@ -790,6 +923,76 @@ int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOM
         delta_time_us = butil::cpuwide_time_us() - now;
         metric->sync_segment_time_us += delta_time_us;
         g_sync_segment_latency << delta_time_us; 
+    }
+    return entries.size();
+}
+
+int SegmentLogStorage::append_entries_new(const std::vector<LogEntry*>& entries, IOMetric* metric) {
+    if (entries.empty()) {
+        return 0;
+    }
+    // LOG(INFO) << "append_entries, size: " << entries.size();
+    if (_last_log_index.load(butil::memory_order_relaxed) + 1
+            != entries.front()->id.index) {
+        LOG(FATAL) << "There's gap between appending entries and _last_log_index"
+                   << " path: " << _path;
+        return -1;
+    }
+    auto start = butil::cpuwide_time_us();
+    scoped_refptr<Segment> last_segment = NULL;
+    int64_t now = 0;
+    int64_t delta_time_us = 0;
+
+    int last_success = 0;
+    for (size_t i = 0; i < entries.size(); i++) {
+        now = butil::cpuwide_time_us();
+        LogEntry* entry = entries[i];
+
+        scoped_refptr<Segment> segment = open_segment();
+        if (FLAGS_raft_trace_append_entry_latency && metric) {
+            delta_time_us = butil::cpuwide_time_us() - now;
+            metric->open_segment_time_us += delta_time_us;
+            g_open_segment_latency << delta_time_us;
+        }
+        if (NULL == segment) {
+            return i;
+        }
+        int ret = segment->prepare_data(entry);
+        if (0 != ret) {
+            // LOG(INFO) << "append_entries return: " << last_success;
+            return last_success;
+        }
+        if (segment->buffer_full()) {
+            int ret = segment->flush_data();
+            if (ret < 0) {
+                return last_success;
+            }
+            _last_log_index.fetch_add(ret, butil::memory_order_release);
+            last_success = i;
+        }
+
+        if (FLAGS_raft_trace_append_entry_latency && metric) {
+            delta_time_us = butil::cpuwide_time_us() - now;
+            metric->append_entry_time_us += delta_time_us;
+            g_segment_append_entry_latency << delta_time_us;
+        }
+        last_segment = segment;
+    }
+    int ret = last_segment->flush_data();
+    if (ret < 0) {
+        // LOG(INFO) << "append_entries return: " << last_success;
+        return last_success;
+    }
+    _last_log_index.fetch_add(ret, butil::memory_order_release);
+
+    append_total_us << butil::cpuwide_time_us() - start;
+    append_entries_n << entries.size();
+    now = butil::cpuwide_time_us();
+    last_segment->sync(_enable_sync);
+    if (FLAGS_raft_trace_append_entry_latency && metric) {
+        delta_time_us = butil::cpuwide_time_us() - now;
+        metric->sync_segment_time_us += delta_time_us;
+        g_sync_segment_latency << delta_time_us;
     }
     return entries.size();
 }
@@ -1213,7 +1416,15 @@ scoped_refptr<Segment> SegmentLogStorage::open_segment() {
         }
     }
     do {
+        // flush the unwritten data before closing a segment
         if (prev_open_segment) {
+            if (prev_open_segment->need_flush()) {
+                int ret = prev_open_segment->flush_data();
+                if (ret < 0) {
+                    LOG(ERROR) << "fail to flush segment data";
+                    return nullptr;
+                }
+            }
             if (prev_open_segment->close(_enable_sync) == 0) {
                 BAIDU_SCOPED_LOCK(_mutex);
                 _open_segment = new Segment(_path, last_log_index() + 1, _checksum_type);
