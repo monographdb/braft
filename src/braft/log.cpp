@@ -531,8 +531,7 @@ int Segment::prepare_data(const LogEntry* entry) {
     _data_list.emplace_back(std::move(head_and_data));
     _pieces[_data_list.size() - 1] = &_data_list.back();
     _to_write += _data_list.back().length();
-
-    _offset_and_term_stashed.push_back(std::make_pair(_bytes, entry->id.term));
+    _offset_and_term_stashed.emplace_back(_bytes, entry->id.term);
 
     return 0;
 }

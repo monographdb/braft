@@ -28,7 +28,7 @@
 
 DEFINE_bool(log_storage_append_entries_in_batch,
     false, "log storage append entries in batch using writev");
-DEFINE_int32(append_batcher_capacity, 256, "AppendBatcher capacity");
+// DEFINE_int32(append_batcher_capacity, 256, "AppendBatcher capacity");
 DEFINE_bool(unlimit_append_batcher, false, "unlimit append batcher");
 
 namespace braft {
