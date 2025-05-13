@@ -83,7 +83,7 @@ int MemoryLogStorage::append_entries(const std::vector<LogEntry*>& entries,
     return entries.size();
 }
 
-int MemoryLogStorage::append_entries_new(const std::vector<LogEntry*>& entries,
+int MemoryLogStorage::append_entries_in_batch(const std::vector<LogEntry*>& entries,
                                          IOMetric* metric) {
     if (entries.empty()) {
         return 0;

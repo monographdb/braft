@@ -919,7 +919,7 @@ int SegmentLogStorage::append_entries(const std::vector<LogEntry*>& entries, IOM
     return entries.size();
 }
 
-int SegmentLogStorage::append_entries_new(const std::vector<LogEntry*>& entries, IOMetric* metric) {
+int SegmentLogStorage::append_entries_in_batch(const std::vector<LogEntry*>& entries, IOMetric* metric) {
     if (entries.empty()) {
         return 0;
     }

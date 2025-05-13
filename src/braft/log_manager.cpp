@@ -26,7 +26,8 @@
 #include "braft/fsm_caller.h"                    // FSMCaller
 
 
-DEFINE_bool(use_new_append_entries, false, "use new append entries");
+DEFINE_bool(log_storage_append_entries_in_batch,
+    false, "log storage append entries in batch using writev");
 DEFINE_int32(append_batcher_capacity, 256, "AppendBatcher capacity");
 DEFINE_bool(unlimit_append_batcher, false, "unlimit append batcher");
 
@@ -461,8 +462,8 @@ void LogManager::append_to_storage(std::vector<LogEntry*>* to_append,
         butil::Timer timer;
         timer.start();
         g_storage_append_entries_concurrency << 1;
-        int nappent = FLAGS_use_new_append_entries ?
-            _log_storage->append_entries_new(*to_append, metric) :_log_storage->append_entries(*to_append, metric);
+        int nappent = FLAGS_log_storage_append_entries_in_batch ?
+            _log_storage->append_entries_in_batch(*to_append, metric) :_log_storage->append_entries(*to_append, metric);
         g_storage_append_entries_concurrency << -1;
         timer.stop();
         if (nappent != (int)to_append->size()) {

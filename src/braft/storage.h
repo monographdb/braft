@@ -145,7 +145,7 @@ public:
 
     // append entries to log and update IOMetric, return append success number 
     virtual int append_entries(const std::vector<LogEntry*>& entries, IOMetric* metric) = 0;
-    virtual int append_entries_new(const std::vector<LogEntry*>& entries, IOMetric* metric) = 0;
+    virtual int append_entries_in_batch(const std::vector<LogEntry*>& entries, IOMetric* metric) = 0;
 
     // delete logs from storage's head, [first_log_index, first_index_kept) will be discarded
     virtual int truncate_prefix(const int64_t first_index_kept) = 0;
