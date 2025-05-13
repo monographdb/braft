@@ -901,7 +901,7 @@ int SegmentLogStorage::append_entries_in_batch(const std::vector<LogEntry*>& ent
             g_open_segment_latency << delta_time_us;
         }
         if (NULL == segment) {
-            return i;
+            return last_success;
         }
         int ret = segment->prepare_data(entry);
         if (0 != ret) {
