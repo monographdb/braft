@@ -412,7 +412,6 @@ int Segment::append(const LogEntry* entry) {
           .pack32(get_checksum(_checksum_type, data));
     packer.pack32(get_checksum(
                   _checksum_type, header_buf, ENTRY_HEADER_SIZE - 4));
-
     butil::IOBuf header;
     header.append(header_buf, ENTRY_HEADER_SIZE);
     const size_t to_write = header.length() + data.length();
@@ -926,7 +925,6 @@ int SegmentLogStorage::append_entries_in_batch(const std::vector<LogEntry*>& ent
     }
     int ret = last_segment->flush_data();
     if (ret < 0) {
-        // LOG(INFO) << "append_entries return: " << last_success;
         return last_success;
     }
     _last_log_index.fetch_add(ret, butil::memory_order_release);

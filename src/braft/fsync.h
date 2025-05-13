@@ -31,7 +31,6 @@ DECLARE_bool(raft_use_bthread_fsync);
 
 inline int raft_fsync(int fd) {
     if (FLAGS_raft_use_fsync_rather_than_fdatasync) {
-        auto start = butil::cpuwide_time_us();
         if (FLAGS_raft_use_bthread_fsync) {
             int res = bthread_fsync(fd);
             if (res == -1) {

@@ -104,7 +104,6 @@ private:
 friend class butil::RefCountedThreadSafe<Segment>;
     ~Segment() {
         if (_fd >= 0) {
-            LOG(INFO) << "Segment::~Segment(), close fd: " << _fd;
             ::close(_fd);
             _fd = -1;
         }
