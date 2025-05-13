@@ -29,24 +29,18 @@ namespace braft {
 DECLARE_bool(raft_use_fsync_rather_than_fdatasync);
 DECLARE_bool(raft_use_bthread_fsync);
 
-inline bvar::LatencyRecorder sync_us("a_", "sync_us");
-
 inline int raft_fsync(int fd) {
     if (FLAGS_raft_use_fsync_rather_than_fdatasync) {
         auto start = butil::cpuwide_time_us();
         if (FLAGS_raft_use_bthread_fsync) {
             int res = bthread_fsync(fd);
             if (res == -1) {
-                // LOG(ERROR) << "bthread_fsync fails, use fsync";
-                res = fsync(fd);
+                return fsync(fd);
             }
-            sync_us << butil::cpuwide_time_us() - start;
             return res;
         }
         else {
-            int res = fsync(fd);
-            sync_us << butil::cpuwide_time_us() - start;
-            return res;
+            return fsync(fd);
         }
     } else {
 #ifdef __APPLE__

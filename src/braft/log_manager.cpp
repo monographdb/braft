@@ -490,9 +490,6 @@ void LogManager::append_to_storage(std::vector<LogEntry*>* to_append,
 DEFINE_int32(raft_max_append_buffer_size, 256 * 1024, 
              "Flush buffer to LogStorage if the buffer size reaches the limit");
 
-inline bvar::LatencyRecorder run_ns("a_", "closure_run_ns");
-inline bvar::LatencyRecorder append_to_storage_us("a_", "append_to_storage_us");
-
 class AppendBatcher {
 public:
     AppendBatcher(LogManager::StableClosure* storage[], size_t cap, LogId* last_id, 
@@ -511,9 +508,7 @@ public:
     void flush() {
         if (_size > 0) {
             IOMetric metric;
-            auto start = butil::cpuwide_time_us();
             _lm->append_to_storage(&_to_append, _last_id, &metric);
-            append_to_storage_us << butil::cpuwide_time_us() - start;
             g_storage_flush_batch_counter << _size;
             for (size_t i = 0; i < _size; ++i) {
                 _storage[i]->_entries.clear();
@@ -522,9 +517,7 @@ public:
                             EIO, "Corrupted LogStorage");
                 }
                 _storage[i]->update_metric(&metric);
-                // auto start = butil::cpuwide_time_ns();
                 _storage[i]->Run();
-                // run_ns << butil::cpuwide_time_ns() - start;
             }
             for (size_t i = 0; i < _dynamic_storage.size(); ++i) {
                 _dynamic_storage[i]->_entries.clear();
@@ -533,24 +526,19 @@ public:
                             EIO, "Corrupted LogStorage");
                 }
                 _dynamic_storage[i]->update_metric(&metric);
-                // auto start = butil::cpuwide_time_ns();
                 _dynamic_storage[i]->Run();
-                // run_ns << butil::cpuwide_time_ns() - start;
             }
             _dynamic_storage.clear();
             _to_append.clear();
         }
         _size = 0;
         _buffer_size = 0;
-        // LOG(INFO) << "flush, size: " << _size << ", to append cnt: " << _to_append.size();
     }
 
     void append(LogManager::StableClosure* done) {
         // TODO(zkl): trigger flush by FLAGS_append_batcher_capacity
         if (!FLAGS_unlimit_append_batcher &&
             (_size == _cap || _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size)) {
-            // LOG(INFO) << "_size: " << _size << ", _cap: " << _cap << ", _buffer_size: " << _buffer_size
-            //         << ", _to_append size: " << _to_append.size() << ", flush...";
             flush();
         }
         if (_size == _cap) {
@@ -594,9 +582,7 @@ int LogManager::disk_thread(void* meta,
     StableClosure* storage[256];
     AppendBatcher ab(storage, ARRAY_SIZE(storage), &last_id, log_manager);
 
-    size_t disk_thread_iter_cnt = 0;
     for (; iter; ++iter) {
-        disk_thread_iter_cnt++;
                 // ^^^ Must iterate to the end to release to corresponding
                 //     even if some error has occurred
         StableClosure* done = *iter;
@@ -660,7 +646,6 @@ int LogManager::disk_thread(void* meta,
     CHECK(!iter) << "Must iterate to the end";
     ab.flush();
     log_manager->set_disk_id(last_id);
-    // LOG(INFO) << "disk_thread iter cnt: " << disk_thread_iter_cnt;
     return 0;
 }
 
