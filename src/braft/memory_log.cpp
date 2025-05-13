@@ -83,6 +83,18 @@ int MemoryLogStorage::append_entries(const std::vector<LogEntry*>& entries,
     return entries.size();
 }
 
+int MemoryLogStorage::append_entries_in_batch(const std::vector<LogEntry*>& entries,
+                                         IOMetric* metric) {
+    if (entries.empty()) {
+        return 0;
+    }
+    for (size_t i = 0; i < entries.size(); i++) {
+        LogEntry* entry = entries[i];
+        append_entry(entry);
+    }
+    return entries.size();
+}
+
 int MemoryLogStorage::truncate_prefix(const int64_t first_index_kept) {
     std::deque<LogEntry*> popped;
     std::unique_lock<raft_mutex_t> lck(_mutex);

@@ -25,6 +25,12 @@
 #include "braft/storage.h"                       // LogStorage
 #include "braft/fsm_caller.h"                    // FSMCaller
 
+
+DEFINE_bool(log_storage_append_entries_in_batch,
+    false, "log storage append entries in batch using writev");
+// DEFINE_int32(append_batcher_capacity, 256, "AppendBatcher capacity");
+DEFINE_bool(unlimit_append_batcher, false, "unlimit append batcher");
+
 namespace braft {
 
 DEFINE_int32(raft_leader_batch, 256, "max leader io batch");
@@ -456,7 +462,8 @@ void LogManager::append_to_storage(std::vector<LogEntry*>* to_append,
         butil::Timer timer;
         timer.start();
         g_storage_append_entries_concurrency << 1;
-        int nappent = _log_storage->append_entries(*to_append, metric);
+        int nappent = FLAGS_log_storage_append_entries_in_batch ?
+            _log_storage->append_entries_in_batch(*to_append, metric) :_log_storage->append_entries(*to_append, metric);
         g_storage_append_entries_concurrency << -1;
         timer.stop();
         if (nappent != (int)to_append->size()) {
@@ -512,18 +519,40 @@ public:
                 _storage[i]->update_metric(&metric);
                 _storage[i]->Run();
             }
+            for (size_t i = 0; i < _dynamic_storage.size(); ++i) {
+                _dynamic_storage[i]->_entries.clear();
+                if (_lm->_has_error.load(butil::memory_order_relaxed)) {
+                    _dynamic_storage[i]->status().set_error(
+                            EIO, "Corrupted LogStorage");
+                }
+                _dynamic_storage[i]->update_metric(&metric);
+                _dynamic_storage[i]->Run();
+            }
+            _dynamic_storage.clear();
             _to_append.clear();
         }
         _size = 0;
         _buffer_size = 0;
     }
+
     void append(LogManager::StableClosure* done) {
-        if (_size == _cap || 
-                _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size) {
+        // TODO(zkl): trigger flush by FLAGS_append_batcher_capacity
+        if (!FLAGS_unlimit_append_batcher &&
+            (_size == _cap || _buffer_size >= (size_t)FLAGS_raft_max_append_buffer_size)) {
             flush();
         }
-        _storage[_size++] = done;
-        _to_append.insert(_to_append.end(), 
+        if (_size == _cap) {
+            assert(FLAGS_unlimit_append_batcher);
+            // Emplace into the dynamic storage if the static storage is full.
+            if (_dynamic_storage.empty()) {
+                _dynamic_storage.reserve(1024);
+            }
+            _dynamic_storage.emplace_back(done);
+        } else {
+            _storage[_size++] = done;
+        }
+
+        _to_append.insert(_to_append.end(),
                          done->_entries.begin(), done->_entries.end());
         for (size_t i = 0; i < done->_entries.size(); ++i) {
             _buffer_size += done->_entries[i]->data.length();
@@ -532,6 +561,7 @@ public:
 
 private:
     LogManager::StableClosure** _storage;
+    std::vector<LogManager::StableClosure*> _dynamic_storage;
     size_t _cap;
     size_t _size;
     size_t _buffer_size;
@@ -551,7 +581,7 @@ int LogManager::disk_thread(void* meta,
     LogId last_id = log_manager->_disk_id;
     StableClosure* storage[256];
     AppendBatcher ab(storage, ARRAY_SIZE(storage), &last_id, log_manager);
-    
+
     for (; iter; ++iter) {
                 // ^^^ Must iterate to the end to release to corresponding
                 //     even if some error has occurred

@@ -59,6 +59,11 @@ public:
 
     // serialize entry, and append to open segment
     int append(const LogEntry* entry);
+    int prepare_data(const LogEntry* entry);
+
+    bool buffer_full() const;
+    bool need_flush() const;
+    int flush_data();
 
     // get entry by index
     LogEntry* get(const int64_t index) const;
@@ -83,7 +88,7 @@ public:
     }
 
     int64_t bytes() const {
-        return _bytes;
+        return _bytes + _to_write;
     }
 
     int64_t first_index() const {
@@ -127,6 +132,12 @@ friend class butil::RefCountedThreadSafe<Segment>;
     butil::atomic<int64_t> _last_index;
     int _checksum_type;
     std::vector<std::pair<int64_t/*offset*/, int64_t/*term*/> > _offset_and_term;
+    std::vector<std::pair<int64_t/*offset*/, int64_t/*term*/> > _offset_and_term_stashed;
+
+    size_t _to_write{};
+    std::vector<butil::IOBuf> _data_list;
+    // TODO(zkl): use vector
+    butil::IOBuf *_pieces[1024];
 };
 
 // LogStorage use segmented append-only file, all data in disk, all index in memory.
@@ -179,6 +190,7 @@ public:
 
     // append entries to log and update IOMetric, return success append number
     virtual int append_entries(const std::vector<LogEntry*>& entries, IOMetric* metric);
+    virtual int append_entries_in_batch(const std::vector<LogEntry*>& entries, IOMetric* metric);
 
     // delete logs from storage's head, [1, first_index_kept) will be discarded
     virtual int truncate_prefix(const int64_t first_index_kept);
